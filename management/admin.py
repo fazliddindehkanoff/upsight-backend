@@ -142,12 +142,12 @@ class UniversityAdmin(ModelAdmin):
 
 @admin.register(ClassPayment)
 class ClassPaymentAdmin(ModelAdmin):
-    pass
+    list_display = ["student", "class_model", "amount", "date"]
 
 
 @admin.register(EnterancePayment)
 class EnterancePaymentAdmin(ModelAdmin):
-    pass
+    list_display = ["student", "enterance", "amount", "date"]
 
 
 @admin.register(Employee)

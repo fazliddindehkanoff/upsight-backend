@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db import models
 from django.contrib.auth.hashers import check_password
 from .models import (
     Employee,
@@ -64,6 +65,7 @@ class StudentSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
     guardian_name = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
+    enterance_payment_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
@@ -86,6 +88,7 @@ class StudentSerializer(serializers.ModelSerializer):
             "guardian_telephone",
             "guardian_relationship",
             "created_at",
+            "enterance_payment_amount"
         ]
 
     def get_name(self, obj):
@@ -100,6 +103,11 @@ class StudentSerializer(serializers.ModelSerializer):
             if request:
                 return request.build_absolute_uri(obj.picture.url)
         return "/placeholder.svg?height=40&width=40"
+
+    def get_enterance_payment_amount(self, obj):
+        if hasattr(obj, "enterance_payment_amount"):
+            return obj.enterance_payment_amount
+        return 0
 
 
 class ClassTimeTableSerializer(serializers.ModelSerializer):
@@ -253,6 +261,7 @@ class EnteranceSerializer(serializers.ModelSerializer):
     kind_display = serializers.CharField(source="get_kind_display", read_only=True)
     order_display = serializers.CharField(source="get_order_display", read_only=True)
     state_display = serializers.CharField(source="get_state_display", read_only=True)
+    students = serializers.SerializerMethodField()
 
     class Meta:
         model = Enterance
@@ -270,7 +279,23 @@ class EnteranceSerializer(serializers.ModelSerializer):
             "contract_no",
             "state",
             "state_display",
+            "students",
         ]
+
+    def get_students(self, obj):
+        registrations = obj.student_registrations.select_related("student")
+        students = []
+        for reg in registrations:
+            student = reg.student
+            payment_amounts = student.payments.all()
+            payment_amount = 0
+            for payment in payment_amounts:
+                print(payment.enterance)
+                if payment.enterance == obj:
+                    payment_amount += payment.amount
+            student.enterance_payment_amount = payment_amount
+            students.append(student)
+        return StudentSerializer(students, many=True, context=self.context).data
 
 
 class AttachedDocumentSerializer(serializers.ModelSerializer):

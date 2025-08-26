@@ -95,7 +95,7 @@ class Student(models.Model):
         return self.guardian_name_ko if language == "ko" else self.guardian_name_uz
 
     def __str__(self):
-        return f"{self.name_ko or self.name_uz} ({self.student_id})"
+        return f"{self.name_ko or self.name_uz}"
 
     class Meta:
         verbose_name = "Student"
@@ -302,6 +302,9 @@ class Enterance(models.Model):
         max_length=100, verbose_name="Contract No", blank=True, null=True
     )
     state = models.CharField(max_length=50, verbose_name="State", choices=STATE_OPTIONS)
+
+    def __str__(self):
+        return f"{self.university.name_ko} - {self.years} - {self.kind} ({self.order})"
 
 
 class EnteranceStudentRegistration(models.Model):
