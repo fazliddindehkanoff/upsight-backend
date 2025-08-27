@@ -290,10 +290,8 @@ class UniversityManagerSerializer(serializers.ModelSerializer):
             "id",
             "name_ko",
             "name_uz",
-            "position_ko",
-            "position_uz",
-            "phone",
-            "email",
+            "manager_id",
+            "phone_number",
         ]
 
 
