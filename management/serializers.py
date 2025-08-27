@@ -251,7 +251,6 @@ class UniversitySerializer(serializers.ModelSerializer):
     )
     grade_display = serializers.CharField(source="get_grade_display", read_only=True)
     years_display = serializers.CharField(source="get_years_display", read_only=True)
-    attached_documents = serializers.SerializerMethodField()
 
     class Meta:
         model = University
