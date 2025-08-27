@@ -439,6 +439,7 @@ class Class(models.Model):
     classroom = models.CharField(
         max_length=100, verbose_name="Classroom", blank=True, null=True
     )
+    current_month = models.IntegerField(verbose_name="Hozirgi oy", default=1)
 
     def __str__(self):
         return f"{self.classroom} ({self.opening_date})"
@@ -547,6 +548,7 @@ class ClassPayment(models.Model):
     class_model = models.ForeignKey(
         Class, related_name="payments", on_delete=models.CASCADE
     )
+    payment_month = models.IntegerField(verbose_name="To'lov oyi", default=1)
 
 
 class Organ(models.Model):

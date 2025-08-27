@@ -1,5 +1,4 @@
 from rest_framework import serializers
-from django.db import models
 from django.contrib.auth.hashers import check_password
 from .models import (
     Employee,
@@ -15,6 +14,7 @@ from .models import (
     Career,
     CareerHistory,
     CareerCounsel,
+    UniversityManager,
 )
 
 
@@ -66,6 +66,10 @@ class StudentSerializer(serializers.ModelSerializer):
     guardian_name = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
     enterance_payment_amount = serializers.SerializerMethodField()
+    enterance_status = serializers.SerializerMethodField()
+    enterance_date = serializers.SerializerMethodField()
+    bonus = serializers.SerializerMethodField()
+    recommend = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
@@ -88,7 +92,11 @@ class StudentSerializer(serializers.ModelSerializer):
             "guardian_telephone",
             "guardian_relationship",
             "created_at",
-            "enterance_payment_amount"
+            "enterance_payment_amount",
+            "enterance_status",
+            "enterance_date",
+            "bonus",
+            "recommend"
         ]
 
     def get_name(self, obj):
@@ -108,6 +116,25 @@ class StudentSerializer(serializers.ModelSerializer):
         if hasattr(obj, "enterance_payment_amount"):
             return obj.enterance_payment_amount
         return 0
+
+    def get_enterance_status(self, obj):
+        if hasattr(obj, "enterance_status"):
+            return obj.enterance_status
+
+    def get_enterance_date(self, obj):
+        if hasattr(obj, "enterance_date"):
+            return obj.enterance_date
+        return None
+
+    def get_recommend(self, obj):
+        if hasattr(obj, "recommend"):
+            return obj.recommend
+        return None
+
+    def get_bonus(self, obj):
+        if hasattr(obj, "bonus"):
+            return obj.bonus
+        return None
 
 
 class ClassTimeTableSerializer(serializers.ModelSerializer):
@@ -224,6 +251,7 @@ class UniversitySerializer(serializers.ModelSerializer):
     )
     grade_display = serializers.CharField(source="get_grade_display", read_only=True)
     years_display = serializers.CharField(source="get_years_display", read_only=True)
+    attached_documents = serializers.SerializerMethodField()
 
     class Meta:
         model = University
@@ -254,6 +282,31 @@ class UniversitySerializer(serializers.ModelSerializer):
         return f"{obj.representative_ko or ''} / {obj.representative_uz or ''}".strip(
             " /"
         )
+
+
+class UniversityManagerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UniversityManager
+        fields = [
+            "id",
+            "name_ko",
+            "name_uz",
+            "position_ko",
+            "position_uz",
+            "phone",
+            "email",
+        ]
+
+
+class UniversityDetailSerializer(UniversitySerializer):
+    managers = serializers.SerializerMethodField()
+
+    class Meta(UniversitySerializer.Meta):
+        fields = UniversitySerializer.Meta.fields + ["managers"]
+
+    def get_managers(self, obj):
+        managers = UniversityManager.objects.filter(university=obj)
+        return UniversityManagerSerializer(managers, many=True, context=self.context).data
 
 
 class EnteranceSerializer(serializers.ModelSerializer):
@@ -290,10 +343,13 @@ class EnteranceSerializer(serializers.ModelSerializer):
             payment_amounts = student.payments.all()
             payment_amount = 0
             for payment in payment_amounts:
-                print(payment.enterance)
                 if payment.enterance == obj:
                     payment_amount += payment.amount
             student.enterance_payment_amount = payment_amount
+            student.enterance_status = reg.get_state_display()
+            student.enterance_date = reg.date
+            student.bonus = reg.bonus
+            student.recommend = reg.recommend
             students.append(student)
         return StudentSerializer(students, many=True, context=self.context).data
 
