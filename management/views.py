@@ -10,6 +10,7 @@ from .serializers import (
     StudentDetailSerializer,
     EmployeeDetailSerializer,
     ClassSerializer,
+    ClassDetailSerializer,
     ClassTimeTableSerializer,
     UniversitySerializer,
     UniversityDetailSerializer,
@@ -172,13 +173,47 @@ def classes_list(request):
 @permission_classes([IsAuthenticated])
 def class_detail(request, class_id):
     """
-    Get a specific class with its timetables
+    Get a specific class with its timetables, payments, and student registrations.
+    Supports filtering payments by month using ?month=X query parameter.
     """
     try:
-        class_obj = Class.objects.prefetch_related("timetables").get(id=class_id)
-        serializer = ClassSerializer(class_obj, context={"request": request})
+        # Get month filter from query parameters
+        month_filter = request.GET.get("month")
+        if month_filter:
+            try:
+                month_filter = int(month_filter)
+                if month_filter < 1:
+                    return Response(
+                        {"error": "Month must be a positive integer"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            except ValueError:
+                return Response(
+                    {"error": "Month must be a valid integer"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # Fetch class with related data
+        class_obj = Class.objects.prefetch_related(
+            "timetables", "payments__student", "student_registrations__student"
+        ).get(id=class_id)
+        # Create serializer context with month filter
+        context = {"request": request}
+        if month_filter:
+            context["month_filter"] = month_filter
+
+        serializer = ClassDetailSerializer(class_obj, context=context)
+
+        response_data = serializer.data
+
+        # Add filter info to response
+        if month_filter:
+            response_data["filter_info"] = {
+                "filtered_by_month": month_filter,
+                "class_current_month": class_obj.current_month,
+            }
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
     except Class.DoesNotExist:
         return Response({"error": "Class not found"}, status=status.HTTP_404_NOT_FOUND)

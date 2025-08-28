@@ -5,6 +5,7 @@ from .models import (
     Student,
     Class,
     ClassTimeTable,
+    ClassPayment,
     University,
     Enterance,
     AttachedDocument,
@@ -15,7 +16,47 @@ from .models import (
     CareerHistory,
     CareerCounsel,
     UniversityManager,
+    ClassStudentRegistration,
 )
+
+
+class ClassPaymentSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="student.__str__", read_only=True)
+    student_id = serializers.CharField(source="student.student_id", read_only=True)
+    payment_month_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassPayment
+        fields = [
+            "id",
+            "date",
+            "amount",
+            "student",
+            "student_name",
+            "student_id",
+            "payment_month",
+            "payment_month_display",
+        ]
+
+    def get_payment_month_display(self, obj):
+        return f"Month {obj.payment_month}"
+
+
+class ClassStudentRegistrationSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="student.__str__", read_only=True)
+    student_id = serializers.CharField(source="student.student_id", read_only=True)
+    state_display = serializers.CharField(source="get_state_display", read_only=True)
+
+    class Meta:
+        model = ClassStudentRegistration
+        fields = [
+            "id",
+            "student",
+            "student_name",
+            "student_id",
+            "state",
+            "state_display",
+        ]
 
 
 class EmployeeLoginSerializer(serializers.Serializer):
@@ -96,7 +137,7 @@ class StudentSerializer(serializers.ModelSerializer):
             "enterance_status",
             "enterance_date",
             "bonus",
-            "recommend"
+            "recommend",
         ]
 
     def get_name(self, obj):
@@ -217,6 +258,61 @@ class ClassSerializer(serializers.ModelSerializer):
         ]
 
 
+class ClassDetailSerializer(ClassSerializer):
+    payments = serializers.SerializerMethodField()
+    student_registrations = serializers.SerializerMethodField()
+    total_students = serializers.SerializerMethodField()
+    active_students = serializers.SerializerMethodField()
+    total_payments = serializers.SerializerMethodField()
+
+    class Meta(ClassSerializer.Meta):
+        fields = ClassSerializer.Meta.fields + [
+            "payments",
+            "student_registrations",
+            "total_students",
+            "active_students",
+            "total_payments",
+            "current_month",
+        ]
+
+    def get_payments(self, obj):
+        """Get class payments with optional month filtering"""
+        payments = obj.payments.select_related("student").all()
+
+        # Get month filter from context (passed from view)
+        month_filter = self.context.get("month_filter")
+        if month_filter:
+            payments = payments.filter(payment_month=month_filter)
+
+        return ClassPaymentSerializer(payments, many=True, context=self.context).data
+
+    def get_student_registrations(self, obj):
+        """Get students registered for this class"""
+        registrations = obj.student_registrations.select_related("student").all()
+        return ClassStudentRegistrationSerializer(
+            registrations, many=True, context=self.context
+        ).data
+
+    def get_total_students(self, obj):
+        """Get total number of registered students"""
+        return obj.student_registrations.count()
+
+    def get_active_students(self, obj):
+        """Get number of active students (state = 1)"""
+        return obj.student_registrations.filter(state=1).count()
+
+    def get_total_payments(self, obj):
+        """Get total payment amount with optional month filtering"""
+        payments = obj.payments.all()
+
+        # Apply month filter if provided
+        month_filter = self.context.get("month_filter")
+        if month_filter:
+            payments = payments.filter(payment_month=month_filter)
+
+        return sum(payment.amount for payment in payments)
+
+
 class ClassTimeTableCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClassTimeTable
@@ -303,7 +399,9 @@ class UniversityDetailSerializer(UniversitySerializer):
 
     def get_managers(self, obj):
         managers = UniversityManager.objects.filter(university=obj)
-        return UniversityManagerSerializer(managers, many=True, context=self.context).data
+        return UniversityManagerSerializer(
+            managers, many=True, context=self.context
+        ).data
 
 
 class EnteranceSerializer(serializers.ModelSerializer):
