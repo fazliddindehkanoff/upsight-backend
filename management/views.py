@@ -17,11 +17,16 @@ from .serializers import (
     EnteranceSerializer,
     OrganSerializer,
     CareerSerializer,
+    EnterancePaymentSerializer,
+    ClassPaymentSerializer,
+    FinancePaymentSerializer,
 )
 from .models import (
     Student,
     Class,
     ClassTimeTable,
+    ClassPayment,
+    EnterancePayment,
     University,
     Enterance,
     Organ,
@@ -544,6 +549,236 @@ def careers_list(request):
     except Exception as e:
         return Response(
             {"error": "Failed to fetch careers", "details": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+# Finance Views
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def finance_payments_list(request):
+    """
+    Get combined list of all payments (entrance and class payments) for upsight_staff
+    """
+    try:
+        if not request.user.groups.filter(name="upsight_staff").exists():
+            return Response(
+                {"error": "Permission denied. Only staff can view payment data."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Get all entrance payments
+        entrance_payments = EnterancePayment.objects.select_related(
+            "student", "enterance__university"
+        ).all()
+        
+        # Get all class payments
+        class_payments = ClassPayment.objects.select_related(
+            "student", "class_model"
+        ).all()
+
+        # Convert to unified format
+        payments_data = []
+        
+        # Add entrance payments
+        for payment in entrance_payments:
+            payments_data.append({
+                'id': f"entrance_{payment.id}",
+                'original_id': payment.id,
+                'date': payment.date,
+                'amount': payment.amount,
+                'payment_type': 'entrance',
+                'student_id': payment.student.student_id,
+                'student_name_ko': payment.student.name_ko,
+                'student_name_uz': payment.student.name_uz,
+                'university_name': str(payment.enterance.university),
+                'enterance_info': (
+                    f"{payment.enterance.years} - {payment.enterance.get_kind_display()} "
+                    f"({payment.enterance.get_order_display()})"
+                ),
+                'payment_month': None,
+                'payment_month_display': None,
+                'class_info': None,
+            })
+        
+        # Add class payments
+        for payment in class_payments:
+            payments_data.append({
+                'id': f"class_{payment.id}",
+                'original_id': payment.id,
+                'date': payment.date,
+                'amount': payment.amount,
+                'payment_type': 'class',
+                'student_id': payment.student.student_id,
+                'student_name_ko': payment.student.name_ko,
+                'student_name_uz': payment.student.name_uz,
+                'university_name': None,
+                'enterance_info': None,
+                'payment_month': payment.payment_month,
+                'payment_month_display': f"Month {payment.payment_month}",
+                'class_info': (
+                    f"Group {payment.class_model.group} - {payment.class_model.get_level_display()} "
+                    f"{payment.class_model.get_lecture_display()}"
+                ),
+            })
+
+        # Sort by date (most recent first)
+        payments_data.sort(key=lambda x: x['date'], reverse=True)
+
+        # Serialize the data
+        serializer = FinancePaymentSerializer(payments_data, many=True)
+
+        # Calculate totals
+        total_amount = sum(float(payment['amount']) for payment in payments_data)
+        entrance_total = sum(
+            float(payment['amount']) for payment in payments_data
+            if payment['payment_type'] == 'entrance'
+        )
+        class_total = sum(
+            float(payment['amount']) for payment in payments_data
+            if payment['payment_type'] == 'class'
+        )
+
+        return Response(
+            {
+                "payments": serializer.data,
+                "total_count": len(payments_data),
+                "totals": {
+                    "total_amount": total_amount,
+                    "entrance_payments_total": entrance_total,
+                    "class_payments_total": class_total,
+                    "entrance_payments_count": len([p for p in payments_data if p['payment_type'] == 'entrance']),
+                    "class_payments_count": len([p for p in payments_data if p['payment_type'] == 'class']),
+                }
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        return Response(
+            {"error": "Failed to fetch payments", "details": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def entrance_payments_list(request):
+    """Get list of entrance payments for upsight_staff"""
+    try:
+        if not request.user.groups.filter(name="upsight_staff").exists():
+            return Response(
+                {"error": "Permission denied. Only staff can view entrance payments."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        payments = EnterancePayment.objects.select_related(
+            "student", "enterance__university"
+        ).all().order_by('-date')
+        
+        serializer = EnterancePaymentSerializer(payments, many=True, context={"request": request})
+
+        return Response(
+            {
+                "entrance_payments": serializer.data,
+                "total_count": len(serializer.data),
+                "total_amount": sum(payment.amount for payment in payments),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        return Response(
+            {"error": "Failed to fetch entrance payments", "details": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def class_payments_list(request):
+    """Get list of class payments for upsight_staff"""
+    try:
+        if not request.user.groups.filter(name="upsight_staff").exists():
+            return Response(
+                {"error": "Permission denied. Only staff can view class payments."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        payments = ClassPayment.objects.select_related("student", "class_model").all().order_by('-date')
+        
+        serializer = ClassPaymentSerializer(payments, many=True, context={"request": request})
+
+        return Response(
+            {
+                "class_payments": serializer.data,
+                "total_count": len(serializer.data),
+                "total_amount": sum(payment.amount for payment in payments),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        return Response(
+            {"error": "Failed to fetch class payments", "details": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def entrance_payment_detail(request, payment_id):
+    """Get entrance payment details for upsight_staff"""
+    try:
+        if not request.user.groups.filter(name="upsight_staff").exists():
+            return Response(
+                {"error": "Permission denied. Only staff can view entrance payment details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        payment = EnterancePayment.objects.select_related(
+            "student", "enterance__university"
+        ).get(id=payment_id)
+        
+        serializer = EnterancePaymentSerializer(payment, context={"request": request})
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except EnterancePayment.DoesNotExist:
+        return Response(
+            {"error": "Entrance payment not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {"error": "Failed to fetch entrance payment", "details": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def class_payment_detail(request, payment_id):
+    """Get class payment details for upsight_staff"""
+    try:
+        if not request.user.groups.filter(name="upsight_staff").exists():
+            return Response(
+                {"error": "Permission denied. Only staff can view class payment details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        payment = ClassPayment.objects.select_related("student", "class_model").get(id=payment_id)
+        
+        serializer = ClassPaymentSerializer(payment, context={"request": request})
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except ClassPayment.DoesNotExist:
+        return Response(
+            {"error": "Class payment not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {"error": "Failed to fetch class payment", "details": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 

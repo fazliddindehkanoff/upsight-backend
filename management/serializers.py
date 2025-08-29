@@ -6,6 +6,7 @@ from .models import (
     Class,
     ClassTimeTable,
     ClassPayment,
+    EnterancePayment,
     University,
     Enterance,
     AttachedDocument,
@@ -21,7 +22,8 @@ from .models import (
 
 
 class ClassPaymentSerializer(serializers.ModelSerializer):
-    student_name = serializers.CharField(source="student.__str__", read_only=True)
+    student_name_ko = serializers.CharField(source="student.name_ko", read_only=True)
+    student_name_uz = serializers.CharField(source="student.name_uz", read_only=True)
     student_id = serializers.CharField(source="student.student_id", read_only=True)
     payment_month_display = serializers.SerializerMethodField()
 
@@ -32,7 +34,8 @@ class ClassPaymentSerializer(serializers.ModelSerializer):
             "date",
             "amount",
             "student",
-            "student_name",
+            "student_name_ko",
+            "student_name_uz",
             "student_id",
             "payment_month",
             "payment_month_display",
@@ -40,6 +43,32 @@ class ClassPaymentSerializer(serializers.ModelSerializer):
 
     def get_payment_month_display(self, obj):
         return f"Month {obj.payment_month}"
+
+
+class EnterancePaymentSerializer(serializers.ModelSerializer):
+    student_name_ko = serializers.CharField(source="student.name_ko", read_only=True)
+    student_name_uz = serializers.CharField(source="student.name_uz", read_only=True)
+    student_id = serializers.CharField(source="student.student_id", read_only=True)
+    enterance_info = serializers.SerializerMethodField()
+    university_name = serializers.CharField(source="enterance.university.__str__", read_only=True)
+
+    class Meta:
+        model = EnterancePayment
+        fields = [
+            "id",
+            "date",
+            "amount",
+            "student",
+            "student_name_ko",
+            "student_name_uz",
+            "student_id",
+            "enterance",
+            "enterance_info",
+            "university_name",
+        ]
+
+    def get_enterance_info(self, obj):
+        return f"{obj.enterance.years} - {obj.enterance.get_kind_display()} ({obj.enterance.get_order_display()})"
 
 
 class ClassStudentRegistrationSerializer(serializers.ModelSerializer):
@@ -86,7 +115,20 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Employee
-        fields = ["id", "employee_id", "email", "name", "role", "avatar"]
+        fields = [
+            "id",
+            "employee_id",
+            "email",
+            "name",
+            "role",
+            "avatar",
+            "gender",
+            "status",
+            "birth_date",
+            "telephone",
+            "position",
+            "start_date",
+        ]
 
     def get_name(self, obj):
         return obj.name_ko or obj.name_uz
@@ -626,3 +668,30 @@ class StudentRegistrationSerializer(serializers.ModelSerializer):
             f"Group {obj.class_model.group} - {obj.class_model.get_level_display()} "
             f"{obj.class_model.get_lecture_display()}"
         )
+
+
+class FinancePaymentSerializer(serializers.Serializer):
+    """
+    Combined serializer for both entrance payments and class payments
+    """
+    id = serializers.CharField()  # Changed to CharField to support "entrance_X" and "class_X" format
+    original_id = serializers.IntegerField()  # The actual payment ID from database
+    date = serializers.DateField()
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    payment_type = serializers.CharField()  # 'entrance' or 'class'
+    student_id = serializers.CharField()
+    student_name_ko = serializers.CharField()
+    student_name_uz = serializers.CharField()
+    student_name = serializers.SerializerMethodField()
+    
+    # Fields specific to entrance payments
+    university_name = serializers.CharField(required=False, allow_null=True)
+    enterance_info = serializers.CharField(required=False, allow_null=True)
+    
+    # Fields specific to class payments
+    payment_month = serializers.IntegerField(required=False, allow_null=True)
+    payment_month_display = serializers.CharField(required=False, allow_null=True)
+    class_info = serializers.CharField(required=False, allow_null=True)
+    
+    def get_student_name(self, obj):
+        return obj.get('student_name_ko', '') or obj.get('student_name_uz', '')

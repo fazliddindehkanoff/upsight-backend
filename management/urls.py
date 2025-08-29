@@ -18,6 +18,11 @@ from .views import (
     organ_detail,
     careers_list,
     career_detail,
+    finance_payments_list,
+    entrance_payments_list,
+    class_payments_list,
+    entrance_payment_detail,
+    class_payment_detail,
 )
 
 urlpatterns = [
@@ -51,4 +56,10 @@ urlpatterns = [
     # Career endpoints
     path("careers", careers_list, name="careers_list"),
     path("careers/<int:career_id>", career_detail, name="career_detail"),
+    # Finance endpoints
+    path("finance/payments", finance_payments_list, name="finance_payments_list"),
+    path("finance/entrance-payments", entrance_payments_list, name="entrance_payments_list"),
+    path("finance/class-payments", class_payments_list, name="class_payments_list"),
+    path("finance/entrance-payments/<int:payment_id>", entrance_payment_detail, name="entrance_payment_detail"),
+    path("finance/class-payments/<int:payment_id>", class_payment_detail, name="class_payment_detail"),
 ]
