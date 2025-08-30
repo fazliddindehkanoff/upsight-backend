@@ -591,7 +591,7 @@ class UniversityManager(models.Model):
     )
     name_uz = models.CharField(max_length=100, verbose_name="Name (Uzbek)")
     name_ko = models.CharField(max_length=100, verbose_name="Name (Korean)")
-    manager_id = models.IntegerField(unique=True)
+    manager_id = models.CharField(max_length=100, unique=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     password = models.CharField(max_length=128, verbose_name="Password")
     user = models.OneToOneField(
@@ -619,7 +619,7 @@ class UniversityManager(models.Model):
         super().save(*args, **kwargs)
         if is_new:
             user = User.objects.create(
-                username=self.manager_id,
+                username=str(self.manager_id),
                 first_name=self.name_ko or self.name_uz,
                 password=self.password,
                 is_active=True,
@@ -666,7 +666,7 @@ class OrganManager(models.Model):
         super().save(*args, **kwargs)
         if is_new:
             user = User.objects.create(
-                username=self.manager_id,
+                username=str(self.manager_id),
                 first_name=self.name_ko or self.name_uz,
                 password=self.password,
                 is_active=True,

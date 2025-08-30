@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    employee_login,
+    unified_login,
     employee_logout,
     employee_profile,
     students_list,
@@ -27,7 +27,8 @@ from .views import (
 
 urlpatterns = [
     # Authentication endpoints
-    path("auth/login", employee_login, name="employee_login"),
+    # path("auth/login", employee_login, name="employee_login"),
+    path("auth/login", unified_login, name="unified_login"),
     path("auth/logout", employee_logout, name="employee_logout"),
     path("auth/profile", employee_profile, name="employee_profile"),
     # Student endpoints

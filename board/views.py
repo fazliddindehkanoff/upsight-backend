@@ -1,7 +1,8 @@
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .serializers import (
     NewsSerializer,
@@ -28,6 +29,47 @@ def get_user_university(user):
     except UniversityManager.DoesNotExist:
         pass
     return None
+
+
+def process_form_data(data):
+    """Process and clean form data from multipart/form requests"""
+    if hasattr(data, 'getlist'):
+        # Handle QueryDict properly, preserving file objects
+        processed_data = {}
+        for key in data.keys():
+            values = data.getlist(key)
+            if len(values) == 1:
+                processed_data[key] = values[0]
+            else:
+                processed_data[key] = values
+    else:
+        processed_data = dict(data) if data else {}
+    
+    # Clean empty strings and convert to None for better validation
+    # Only process text fields, avoid corrupting file objects
+    for key, value in processed_data.items():
+        if isinstance(value, str) and value.strip() == '':
+            processed_data[key] = None
+        elif isinstance(value, str):
+            processed_data[key] = value.strip()
+    
+    return processed_data
+
+
+def format_serializer_errors(errors):
+    """Format serializer errors into user-friendly messages"""
+    formatted_errors = {}
+    
+    for field, error_list in errors.items():
+        if isinstance(error_list, list):
+            formatted_errors[field] = error_list[0] if error_list else "Invalid value"
+        elif isinstance(error_list, dict):
+            # Handle nested errors
+            formatted_errors[field] = format_serializer_errors(error_list)
+        else:
+            formatted_errors[field] = str(error_list)
+    
+    return formatted_errors
 
 
 def filter_by_permissions(queryset, user):
@@ -116,25 +158,33 @@ def news_detail(request, news_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def news_create(request):
-    """Create news item"""
+    """Create news item with enhanced form data handling"""
     try:
         # Check permissions
-        if not (request.user.groups.filter(name="upsight_staff").exists() or 
+        if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can create news."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can create news items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         # Set university for university_staff
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if not user_university:
                 return Response(
-                    {"error": "University not found for user."},
+                    {
+                        "error": "University not found",
+                        "message": "Your user account is not associated with any university. Please contact support."
+                    },
                     status=status.HTTP_400_BAD_REQUEST
                 )
             data['university'] = user_university.id
@@ -146,57 +196,88 @@ def news_create(request):
             
             return Response(
                 {
-                    "message": "News created successfully",
-                    "news": response_serializer.data
+                    "success": True,
+                    "message": "News item created successfully",
+                    "data": {
+                        "news": response_serializer.data
+                    }
                 },
                 status=status.HTTP_201_CREATED
             )
         
+        # Enhanced error response
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
     except Exception as e:
         return Response(
-            {"error": "Failed to create news", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while creating the news item.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
 @api_view(["PUT", "PATCH"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def news_update(request, news_id):
-    """Update news item"""
+    """Update news item with enhanced form data handling"""
     try:
         # Check permissions
-        if not (request.user.groups.filter(name="upsight_staff").exists() or 
+        if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can update news."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can update news items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        news = News.objects.get(id=news_id)
+        try:
+            news = News.objects.get(id=news_id)
+        except News.DoesNotExist:
+            return Response(
+                {
+                    "error": "News not found",
+                    "message": f"News item with ID {news_id} does not exist."
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         # Check if user can update this news
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if user_university != news.university:
                 return Response(
-                    {"error": "Permission denied. You can only update your university's news."},
+                    {
+                        "error": "Permission denied",
+                        "message": "You can only update news items from your own university."
+                    },
                     status=status.HTTP_403_FORBIDDEN
                 )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         # Ensure university doesn't change for university_staff
         if request.user.groups.filter(name="university_staff").exists():
             data['university'] = news.university.id
         
         serializer = NewsCreateUpdateSerializer(
-            news, 
-            data=data, 
+            news,
+            data=data,
             partial=(request.method == "PATCH")
         )
         
@@ -206,25 +287,34 @@ def news_update(request, news_id):
             
             return Response(
                 {
-                    "message": "News updated successfully",
-                    "news": response_serializer.data
+                    "success": True,
+                    "message": "News item updated successfully",
+                    "data": {
+                        "news": response_serializer.data
+                    }
                 },
                 status=status.HTTP_200_OK
             )
         
+        # Enhanced error response
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    except News.DoesNotExist:
-        return Response(
-            {"error": "News not found"}, 
-            status=status.HTTP_404_NOT_FOUND
-        )
     except Exception as e:
         return Response(
-            {"error": "Failed to update news", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while updating the news item.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -343,23 +433,31 @@ def notice_detail(request, notice_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def notice_create(request):
-    """Create notice item"""
+    """Create notice item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can create notices."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can create notice items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if not user_university:
                 return Response(
-                    {"error": "University not found for user."},
+                    {
+                        "error": "University not found",
+                        "message": "Your user account is not associated with any university. Please contact support."
+                    },
                     status=status.HTTP_400_BAD_REQUEST
                 )
             data['university'] = user_university.id
@@ -371,47 +469,77 @@ def notice_create(request):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Notice created successfully",
-                    "notice": response_serializer.data
+                    "data": {
+                        "notice": response_serializer.data
+                    }
                 },
                 status=status.HTTP_201_CREATED
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
     except Exception as e:
         return Response(
-            {"error": "Failed to create notice", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while creating the notice.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
 @api_view(["PUT", "PATCH"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def notice_update(request, notice_id):
-    """Update notice item"""
+    """Update notice item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can update notices."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can update notice items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        notice = Notice.objects.get(id=notice_id)
+        try:
+            notice = Notice.objects.get(id=notice_id)
+        except Notice.DoesNotExist:
+            return Response(
+                {
+                    "error": "Notice not found",
+                    "message": f"Notice with ID {notice_id} does not exist."
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if user_university != notice.university:
                 return Response(
-                    {"error": "Permission denied. You can only update your university's notices."},
+                    {
+                        "error": "Permission denied",
+                        "message": "You can only update notices from your own university."
+                    },
                     status=status.HTTP_403_FORBIDDEN
                 )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         if request.user.groups.filter(name="university_staff").exists():
             data['university'] = notice.university.id
@@ -428,25 +556,33 @@ def notice_update(request, notice_id):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Notice updated successfully",
-                    "notice": response_serializer.data
+                    "data": {
+                        "notice": response_serializer.data
+                    }
                 },
                 status=status.HTTP_200_OK
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    except Notice.DoesNotExist:
-        return Response(
-            {"error": "Notice not found"},
-            status=status.HTTP_404_NOT_FOUND
-        )
     except Exception as e:
         return Response(
-            {"error": "Failed to update notice", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while updating the notice.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -563,23 +699,31 @@ def translation_detail(request, translation_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def translation_create(request):
-    """Create translation item"""
+    """Create translation item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can create translations."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can create translation items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if not user_university:
                 return Response(
-                    {"error": "University not found for user."},
+                    {
+                        "error": "University not found",
+                        "message": "Your user account is not associated with any university. Please contact support."
+                    },
                     status=status.HTTP_400_BAD_REQUEST
                 )
             data['university'] = user_university.id
@@ -591,47 +735,77 @@ def translation_create(request):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Translation created successfully",
-                    "translation": response_serializer.data
+                    "data": {
+                        "translation": response_serializer.data
+                    }
                 },
                 status=status.HTTP_201_CREATED
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
     except Exception as e:
         return Response(
-            {"error": "Failed to create translation", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while creating the translation.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
 @api_view(["PUT", "PATCH"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def translation_update(request, translation_id):
-    """Update translation item"""
+    """Update translation item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can update translations."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can update translation items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        translation = Translation.objects.get(id=translation_id)
+        try:
+            translation = Translation.objects.get(id=translation_id)
+        except Translation.DoesNotExist:
+            return Response(
+                {
+                    "error": "Translation not found",
+                    "message": f"Translation with ID {translation_id} does not exist."
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if user_university != translation.university:
                 return Response(
-                    {"error": "Permission denied. You can only update your university's translations."},
+                    {
+                        "error": "Permission denied",
+                        "message": "You can only update translations from your own university."
+                    },
                     status=status.HTTP_403_FORBIDDEN
                 )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         if request.user.groups.filter(name="university_staff").exists():
             data['university'] = translation.university.id
@@ -648,25 +822,33 @@ def translation_update(request, translation_id):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Translation updated successfully",
-                    "translation": response_serializer.data
+                    "data": {
+                        "translation": response_serializer.data
+                    }
                 },
                 status=status.HTTP_200_OK
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    except Translation.DoesNotExist:
-        return Response(
-            {"error": "Translation not found"},
-            status=status.HTTP_404_NOT_FOUND
-        )
     except Exception as e:
         return Response(
-            {"error": "Failed to update translation", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while updating the translation.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -785,23 +967,31 @@ def information_detail(request, information_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def information_create(request):
-    """Create information item"""
+    """Create information item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can create information."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can create information items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if not user_university:
                 return Response(
-                    {"error": "University not found for user."},
+                    {
+                        "error": "University not found",
+                        "message": "Your user account is not associated with any university. Please contact support."
+                    },
                     status=status.HTTP_400_BAD_REQUEST
                 )
             data['university'] = user_university.id
@@ -813,47 +1003,77 @@ def information_create(request):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Information created successfully",
-                    "information": response_serializer.data
+                    "data": {
+                        "information": response_serializer.data
+                    }
                 },
                 status=status.HTTP_201_CREATED
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
     except Exception as e:
         return Response(
-            {"error": "Failed to create information", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while creating the information.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
 @api_view(["PUT", "PATCH"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def information_update(request, information_id):
-    """Update information item"""
+    """Update information item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can update information."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can update information items."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        information = Information.objects.get(id=information_id)
+        try:
+            information = Information.objects.get(id=information_id)
+        except Information.DoesNotExist:
+            return Response(
+                {
+                    "error": "Information not found",
+                    "message": f"Information with ID {information_id} does not exist."
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if user_university != information.university:
                 return Response(
-                    {"error": "Permission denied. You can only update your university's information."},
+                    {
+                        "error": "Permission denied",
+                        "message": "You can only update information from your own university."
+                    },
                     status=status.HTTP_403_FORBIDDEN
                 )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         if request.user.groups.filter(name="university_staff").exists():
             data['university'] = information.university.id
@@ -870,25 +1090,33 @@ def information_update(request, information_id):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Information updated successfully",
-                    "information": response_serializer.data
+                    "data": {
+                        "information": response_serializer.data
+                    }
                 },
                 status=status.HTTP_200_OK
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    except Information.DoesNotExist:
-        return Response(
-            {"error": "Information not found"},
-            status=status.HTTP_404_NOT_FOUND
-        )
     except Exception as e:
         return Response(
-            {"error": "Failed to update information", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while updating the information.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -1013,17 +1241,22 @@ def information_document_detail(request, document_id):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def information_document_create(request):
-    """Create information document item"""
+    """Create information document item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can create information documents."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can create information documents."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        data = request.data.copy()
+        # Process form data
+        data = process_form_data(request.data)
         
         # Validate information belongs to user's university for university_staff
         if request.user.groups.filter(name="university_staff").exists():
@@ -1032,13 +1265,26 @@ def information_document_create(request):
                 information = Information.objects.get(id=data.get('information'))
                 if user_university != information.university:
                     return Response(
-                        {"error": "Permission denied. You can only create documents "
-                                  "for your university's information."},
+                        {
+                            "error": "Permission denied",
+                            "message": "You can only create documents for information from your own university."
+                        },
                         status=status.HTTP_403_FORBIDDEN
                     )
             except Information.DoesNotExist:
                 return Response(
-                    {"error": "Information not found."},
+                    {
+                        "error": "Information not found",
+                        "message": "The specified information item does not exist."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            except (ValueError, TypeError):
+                return Response(
+                    {
+                        "error": "Invalid information ID",
+                        "message": "Please provide a valid information ID."
+                    },
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
@@ -1049,49 +1295,81 @@ def information_document_create(request):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Information document created successfully",
-                    "document": response_serializer.data
+                    "data": {
+                        "document": response_serializer.data
+                    }
                 },
                 status=status.HTTP_201_CREATED
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
     except Exception as e:
         return Response(
-            {"error": "Failed to create information document", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while creating the document.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
 @api_view(["PUT", "PATCH"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def information_document_update(request, document_id):
-    """Update information document item"""
+    """Update information document item with enhanced form data handling"""
     try:
         if not (request.user.groups.filter(name="upsight_staff").exists() or
                 request.user.groups.filter(name="university_staff").exists()):
             return Response(
-                {"error": "Permission denied. Only staff can update information documents."},
+                {
+                    "error": "Permission denied",
+                    "message": "Only staff members can update information documents."
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        document = InformationDocuments.objects.select_related('information__university').get(id=document_id)
+        try:
+            document = InformationDocuments.objects.select_related('information__university').get(id=document_id)
+        except InformationDocuments.DoesNotExist:
+            return Response(
+                {
+                    "error": "Document not found",
+                    "message": f"Information document with ID {document_id} does not exist."
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         if request.user.groups.filter(name="university_staff").exists():
             user_university = get_user_university(request.user)
             if user_university != document.information.university:
                 return Response(
-                    {"error": "Permission denied. You can only update your university's information documents."},
+                    {
+                        "error": "Permission denied",
+                        "message": "You can only update documents from your own university."
+                    },
                     status=status.HTTP_403_FORBIDDEN
                 )
         
+        # Process form data
+        data = process_form_data(request.data)
+        
         serializer = InformationDocumentsCreateUpdateSerializer(
             document,
-            data=request.data,
+            data=data,
             partial=(request.method == "PATCH")
         )
         
@@ -1101,25 +1379,33 @@ def information_document_update(request, document_id):
             
             return Response(
                 {
+                    "success": True,
                     "message": "Information document updated successfully",
-                    "document": response_serializer.data
+                    "data": {
+                        "document": response_serializer.data
+                    }
                 },
                 status=status.HTTP_200_OK
             )
         
         return Response(
-            {"error": "Invalid data", "details": serializer.errors},
+            {
+                "success": False,
+                "error": "Validation failed",
+                "message": "Please check the form data and try again.",
+                "field_errors": format_serializer_errors(serializer.errors)
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    except InformationDocuments.DoesNotExist:
-        return Response(
-            {"error": "Information document not found"},
-            status=status.HTTP_404_NOT_FOUND
-        )
     except Exception as e:
         return Response(
-            {"error": "Failed to update information document", "details": str(e)},
+            {
+                "success": False,
+                "error": "Server error",
+                "message": "An unexpected error occurred while updating the document.",
+                "details": str(e) if hasattr(e, '__str__') else "Unknown error"
+            },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 

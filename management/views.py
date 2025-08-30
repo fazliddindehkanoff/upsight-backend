@@ -5,7 +5,9 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
     EmployeeLoginSerializer,
+    UnifiedLoginSerializer,
     EmployeeSerializer,
+    UniversityManagerSerializer,
     StudentSerializer,
     StudentDetailSerializer,
     EmployeeDetailSerializer,
@@ -32,15 +34,24 @@ from .models import (
     Organ,
     Career,
     Employee,
+    UniversityManager,
 )
 
 
-def get_tokens_for_user(employee):
-    """Generate JWT tokens for employee"""
-    refresh = RefreshToken.for_user(employee.user)
-    refresh["employee_id"] = employee.employee_id
+def get_tokens_for_user(user_obj):
+    """Generate JWT tokens for employee or university manager"""
+    refresh = RefreshToken.for_user(user_obj.user)
+    
+    if isinstance(user_obj, Employee):
+        refresh["custom_user_id"] = user_obj.employee_id
+        refresh["user_type"] = "employee"
+    elif isinstance(user_obj, UniversityManager):
+        refresh["custom_user_id"] = user_obj.manager_id
+        refresh["user_type"] = "manager"
+        refresh["university_id"] = user_obj.university.id if user_obj.university else None
+    
     refresh["role"] = (
-        employee.user.groups.first().name if employee.user.groups.first() else "user"
+        user_obj.user.groups.first().name if user_obj.user.groups.first() else "user"
     )
 
     return {
@@ -68,6 +79,41 @@ def employee_login(request):
             {
                 "tokens": tokens,
                 "user": employee_serializer.data,
+                "message": "Login successful",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    return Response(
+        {"error": "Invalid credentials", "details": serializer.errors},
+        status=status.HTTP_401_UNAUTHORIZED,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def unified_login(request):
+    """
+    Unified login endpoint that handles both Employee and UniversityManager authentication
+    """
+    serializer = UnifiedLoginSerializer(data=request.data)
+
+    if serializer.is_valid():
+        user = serializer.validated_data["user"]
+        user_type = serializer.validated_data["user_type"]
+        tokens = get_tokens_for_user(user)
+
+        # Serialize user data based on type
+        if user_type == "employee":
+            user_serializer = EmployeeSerializer(user, context={"request": request})
+        else:  # manager
+            user_serializer = UniversityManagerSerializer(user, context={"request": request})
+
+        return Response(
+            {
+                "tokens": tokens,
+                "user": user_serializer.data,
+                "user_type": user_type,
                 "message": "Login successful",
             },
             status=status.HTTP_200_OK,

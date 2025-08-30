@@ -50,7 +50,9 @@ class EnterancePaymentSerializer(serializers.ModelSerializer):
     student_name_uz = serializers.CharField(source="student.name_uz", read_only=True)
     student_id = serializers.CharField(source="student.student_id", read_only=True)
     enterance_info = serializers.SerializerMethodField()
-    university_name = serializers.CharField(source="enterance.university.__str__", read_only=True)
+    university_name = serializers.CharField(
+        source="enterance.university.__str__", read_only=True
+    )
 
     class Meta:
         model = EnterancePayment
@@ -106,6 +108,130 @@ class EmployeeLoginSerializer(serializers.Serializer):
                 pass
 
         raise serializers.ValidationError("Invalid credentials.")
+
+
+class UnifiedLoginSerializer(serializers.Serializer):
+    """
+    Unified login serializer that handles both Employee and UniversityManager authentication
+    """
+
+    user_id = serializers.CharField(help_text="Employee ID or Manager ID")
+    password = serializers.CharField(write_only=True)
+    user_type = serializers.ChoiceField(
+        choices=[("employee", "Employee"), ("manager", "University Manager")],
+        required=False,
+        help_text="Specify user type, or leave empty for auto-detection",
+    )
+
+    def validate(self, attrs):
+        user_id = attrs.get("user_id")
+        password = attrs.get("password")
+        user_type = attrs.get("user_type")
+
+        if not user_id or not password:
+            raise serializers.ValidationError("User ID and password are required.")
+
+        # Try to authenticate based on user_type or auto-detect
+        if user_type == "employee":
+            return self._validate_employee(attrs)
+        elif user_type == "manager":
+            return self._validate_manager(attrs)
+        else:
+            # Auto-detection: try employee first, then manager
+            employee_error = None
+            manager_error = None
+            
+            # Try employee authentication first
+            try:
+                return self._validate_employee(attrs)
+            except serializers.ValidationError as e:
+                employee_error = e
+            
+            # Try manager authentication only if user_id could be a number
+            try:
+                # Check if user_id could be a valid manager_id (numeric)
+                int(user_id)
+                return self._validate_manager(attrs)
+            except ValueError:
+                # user_id is not numeric, so it can't be a manager_id
+                # Return the employee error since that's more likely
+                raise employee_error
+            except serializers.ValidationError as e:
+                manager_error = e
+            
+            # If both failed, determine which error to return
+            if "User not found" in str(manager_error):
+                raise manager_error
+            else:
+                raise employee_error
+
+    def _validate_employee(self, attrs):
+        """Validate employee credentials"""
+        user_id = attrs.get("user_id")
+        password = attrs.get("password")
+
+        try:
+            employee = Employee.objects.get(employee_id=user_id)
+            if check_password(password, employee.password):
+                attrs["user"] = employee
+                attrs["user_type"] = "employee"
+                return attrs
+            else:
+                raise serializers.ValidationError("Invalid password.")
+        except Employee.DoesNotExist:
+            raise serializers.ValidationError("User not found.")
+
+        raise serializers.ValidationError("Invalid employee credentials.")
+
+    def _validate_manager(self, attrs):
+        """Validate university manager credentials"""
+        user_id = attrs.get("user_id")
+        password = attrs.get("password")
+
+        try:
+            # Try to convert user_id to integer for manager_id
+            manager_id = int(user_id)
+            manager = UniversityManager.objects.get(manager_id=manager_id)
+            if check_password(password, manager.password):
+                attrs["user"] = manager
+                attrs["user_type"] = "manager"
+                return attrs
+        except ValueError:
+            # user_id is not a valid integer, so it's not a manager ID
+            raise serializers.ValidationError("Manager ID must be a number.")
+        except UniversityManager.DoesNotExist:
+            # manager_id is valid integer but manager doesn't exist
+            raise serializers.ValidationError("User not found.")
+
+        raise serializers.ValidationError("Invalid manager credentials.")
+
+
+class UniversityManagerSerializer(serializers.ModelSerializer):
+    """Serializer for UniversityManager user data in login response"""
+
+    name = serializers.SerializerMethodField()
+    role = serializers.SerializerMethodField()
+    university_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UniversityManager
+        fields = [
+            "id",
+            "manager_id",
+            "name",
+            "role",
+            "university_name",
+            "phone_number",
+        ]
+
+    def get_name(self, obj):
+        return obj.name_ko or obj.name_uz
+
+    def get_role(self, obj):
+        return "university_staff"
+
+    def get_university_name(self, obj):
+        return str(obj.university) if obj.university else None
 
 
 class EmployeeSerializer(serializers.ModelSerializer):
@@ -421,18 +547,6 @@ class UniversitySerializer(serializers.ModelSerializer):
         )
 
 
-class UniversityManagerSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = UniversityManager
-        fields = [
-            "id",
-            "name_ko",
-            "name_uz",
-            "manager_id",
-            "phone_number",
-        ]
-
-
 class UniversityDetailSerializer(UniversitySerializer):
     managers = serializers.SerializerMethodField()
 
@@ -674,7 +788,10 @@ class FinancePaymentSerializer(serializers.Serializer):
     """
     Combined serializer for both entrance payments and class payments
     """
-    id = serializers.CharField()  # Changed to CharField to support "entrance_X" and "class_X" format
+
+    id = (
+        serializers.CharField()
+    )  # Changed to CharField to support "entrance_X" and "class_X" format
     original_id = serializers.IntegerField()  # The actual payment ID from database
     date = serializers.DateField()
     amount = serializers.DecimalField(max_digits=10, decimal_places=2)
@@ -683,15 +800,15 @@ class FinancePaymentSerializer(serializers.Serializer):
     student_name_ko = serializers.CharField()
     student_name_uz = serializers.CharField()
     student_name = serializers.SerializerMethodField()
-    
+
     # Fields specific to entrance payments
     university_name = serializers.CharField(required=False, allow_null=True)
     enterance_info = serializers.CharField(required=False, allow_null=True)
-    
+
     # Fields specific to class payments
     payment_month = serializers.IntegerField(required=False, allow_null=True)
     payment_month_display = serializers.CharField(required=False, allow_null=True)
     class_info = serializers.CharField(required=False, allow_null=True)
-    
+
     def get_student_name(self, obj):
-        return obj.get('student_name_ko', '') or obj.get('student_name_uz', '')
+        return obj.get("student_name_ko", "") or obj.get("student_name_uz", "")
